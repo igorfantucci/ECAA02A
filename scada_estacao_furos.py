@@ -1,281 +1,707 @@
 """
 SCADA - Estação de Furação FESTO (Indústria 4.0)
 Laboratório ECAA02A - UNIFEI
-Simulador & Sistema Supervisório Completo em Python
+Com Login, Perfis, Tema Claro/Escuro e Logout
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import time
 import math
-import threading
 
+try:
+    from PIL import Image, ImageTk, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
+
+# ============================================================
+# USUÁRIOS E AVATARES
+# ============================================================
+USERS = {
+    "Igor":    {"password": "123", "color": "#61afef"},
+    "Thiago":  {"password": "123", "color": "#98c379"},
+    "Luiz":    {"password": "123", "color": "#e5c07b"},
+    "Lenarth": {"password": "123", "color": "#c678dd"},
+}
+AVATAR_PATHS = {user: None for user in USERS}
+
+
+def make_avatar_image(username, size=48, image_path=None, dark_mode=True):
+    if not PIL_AVAILABLE:
+        return None
+    bg = (30, 30, 36) if dark_mode else (240, 240, 245)
+    try:
+        if image_path:
+            img = Image.open(image_path).convert("RGB")
+            img = img.resize((size, size), Image.LANCZOS)
+            mask = Image.new("L", (size, size), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+            out = Image.new("RGB", (size, size), bg)
+            out.paste(img, (0, 0), mask)
+            return ImageTk.PhotoImage(out)
+    except Exception:
+        pass
+    img = Image.new("RGB", (size, size), bg)
+    draw = ImageDraw.Draw(img)
+    color = USERS.get(username, {}).get("color", "#61afef")
+    draw.ellipse((0, 0, size - 1, size - 1), fill=color)
+    initial = username[0].upper() if username else "?"
+    try:
+        font = ImageFont.truetype("arial.ttf", int(size * 0.5))
+        bbox = draw.textbbox((0, 0), initial, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        draw.text(((size - tw) / 2 - bbox[0], (size - th) / 2 - bbox[1]),
+                  initial, fill="white", font=font)
+    except Exception:
+        draw.text((size * 0.35, size * 0.2), initial, fill="white")
+    return ImageTk.PhotoImage(img)
+
+
+# ============================================================
+# PALETAS DE TEMA
+# ============================================================
+THEMES = {
+    "dark": {
+        "bg_root": "#1e1e24", "bg_header": "#18181f",
+        "bg_panel": "#23232c", "bg_panel_alt": "#202029",
+        "bg_canvas": "#1a1a22", "bg_input": "#181820",
+        "bg_card_ok": "#1d2d25", "bg_card_nok": "#331e21",
+        "bg_card_rate": "#1e2638",
+        "fg_primary": "#ffffff", "fg_secondary": "#abb2bf",
+        "fg_dim": "#828997", "fg_muted": "#5c6370",
+        "accent_blue": "#61afef", "accent_green": "#98c379",
+        "accent_yellow": "#e5c07b", "accent_orange": "#d19a66",
+        "accent_red": "#e06c75", "accent_purple": "#c678dd",
+        "grid_line": "#1f1f2e", "border": "#3c3f50",
+        "canvas_bg": "#181822", "canvas_inner": "#22242e",
+        "btn_secondary": "#3b4048", "btn_secondary_active": "#4e5560",
+    },
+    "light": {
+        "bg_root": "#f0f0f5", "bg_header": "#e4e4ec",
+        "bg_panel": "#ffffff", "bg_panel_alt": "#f5f5fa",
+        "bg_canvas": "#f8f8fc", "bg_input": "#ffffff",
+        "bg_card_ok": "#e6f5eb", "bg_card_nok": "#fce8ea",
+        "bg_card_rate": "#e6f0fa",
+        "fg_primary": "#1e1e24", "fg_secondary": "#4b5263",
+        "fg_dim": "#6c7080", "fg_muted": "#8c909c",
+        "accent_blue": "#2c6db5", "accent_green": "#2f8a42",
+        "accent_yellow": "#b8860b", "accent_orange": "#b8692a",
+        "accent_red": "#c0392b", "accent_purple": "#8e44ad",
+        "grid_line": "#e8e8ee", "border": "#c8c8d0",
+        "canvas_bg": "#f5f5fa", "canvas_inner": "#e8e8ee",
+        "btn_secondary": "#d0d0d8", "btn_secondary_active": "#c0c0c8",
+    },
+}
+
+
+# ============================================================
+# TELA DE LOGIN
+# ============================================================
+class LoginScreen:
+    def __init__(self, root, on_login):
+        self.root = root
+        self.on_login = on_login
+        self.container = tk.Frame(root, bg="#1e1e24")
+        self.container.pack(fill=tk.BOTH, expand=True)
+        self.avatar_refs = {}
+        self.show_welcome()
+
+    def _clear(self):
+        for child in self.container.winfo_children():
+            child.destroy()
+
+    def show_welcome(self):
+        self._clear()
+        wrap = tk.Frame(self.container, bg="#1e1e24")
+        wrap.place(relx=0.5, rely=0.5, anchor="center")
+
+        tk.Label(wrap, text="⚙", font=("Segoe UI", 60),
+                 fg="#61afef", bg="#1e1e24").pack()
+        tk.Label(wrap, text="SCADA", font=("Segoe UI", 46, "bold"),
+                 fg="#ffffff", bg="#1e1e24").pack()
+        tk.Label(wrap, text="Estação de Furação FESTO",
+                 font=("Segoe UI", 16), fg="#abb2bf", bg="#1e1e24").pack(pady=(0, 6))
+        tk.Label(wrap, text="UNIFEI • ECAA02A • Indústria 4.0",
+                 font=("Segoe UI", 10), fg="#5c6370", bg="#1e1e24").pack(pady=(0, 50))
+
+        tk.Button(wrap, text="ENTRAR", font=("Segoe UI", 18, "bold"),
+                  bg="#61afef", fg="#18181f", activebackground="#4a9de0",
+                  activeforeground="#18181f", relief="flat",
+                  padx=80, pady=16, cursor="hand2",
+                  command=self.show_profiles).pack()
+
+        tk.Label(wrap, text="Sistema Supervisório • Acesso Restrito",
+                 font=("Segoe UI", 8), fg="#4b5263", bg="#1e1e24").pack(pady=(30, 0))
+
+    def show_profiles(self):
+        self._clear()
+        wrap = tk.Frame(self.container, bg="#1e1e24")
+        wrap.place(relx=0.5, rely=0.5, anchor="center")
+
+        tk.Label(wrap, text="Selecione o Perfil", font=("Segoe UI", 24, "bold"),
+                 fg="#ffffff", bg="#1e1e24").pack(pady=(0, 8))
+        tk.Label(wrap, text="Clique no lápis ✏ para trocar a foto de perfil",
+                 font=("Segoe UI", 9), fg="#828997", bg="#1e1e24").pack(pady=(0, 30))
+
+        grid = tk.Frame(wrap, bg="#1e1e24")
+        grid.pack()
+
+        for i, username in enumerate(USERS.keys()):
+            card = tk.Frame(grid, bg="#23232c", bd=1, relief="solid")
+            card.grid(row=0, column=i, padx=10, pady=10, ipadx=14, ipady=16)
+
+            # Container do avatar com overlay de lápis
+            av_container = tk.Frame(card, bg="#23232c", width=90, height=90)
+            av_container.pack()
+            av_container.pack_propagate(False)
+
+            avatar_img = make_avatar_image(username, size=84,
+                                           image_path=AVATAR_PATHS[username],
+                                           dark_mode=True)
+            if avatar_img:
+                self.avatar_refs[username] = avatar_img
+                av = tk.Label(av_container, image=avatar_img,
+                              bg="#23232c", cursor="hand2")
+                av.place(x=3, y=3, width=84, height=84)
+            else:
+                av = tk.Label(av_container, text=username[0].upper(),
+                              font=("Segoe UI", 34, "bold"),
+                              bg=USERS[username]["color"], fg="white",
+                              cursor="hand2")
+                av.place(x=3, y=3, width=84, height=84)
+
+            av.bind("<Button-1>", lambda e, u=username: self.change_photo(u))
+
+            # Lápis sobreposto no canto inferior direito do avatar
+            pencil = tk.Label(av_container, text="✏",
+                              font=("Segoe UI", 12),
+                              bg="#3b4048", fg="#ffffff",
+                              cursor="hand2", padx=5, pady=1,
+                              relief="flat", bd=1)
+            pencil.place(relx=1.0, rely=1.0, anchor="se", x=0, y=0)
+            pencil.bind("<Button-1>", lambda e, u=username: self.change_photo(u))
+
+            tk.Label(card, text=username, font=("Segoe UI", 13, "bold"),
+                     fg="#ffffff", bg="#23232c").pack(pady=(12, 4))
+
+            tk.Button(card, text="Entrar", font=("Segoe UI", 10, "bold"),
+                      bg="#2d6930", fg="white", activebackground="#3d8e41",
+                      activeforeground="white", relief="flat",
+                      cursor="hand2", padx=20, pady=6,
+                      command=lambda u=username: self.show_password(u)).pack(fill=tk.X)
+
+        tk.Button(wrap, text="← Voltar", font=("Segoe UI", 10),
+                  bg="#1e1e24", fg="#abb2bf", activebackground="#1e1e24",
+                  activeforeground="#ffffff", relief="flat",
+                  cursor="hand2", command=self.show_welcome).pack(pady=(30, 0))
+
+    def change_photo(self, username):
+        if not PIL_AVAILABLE:
+            messagebox.showinfo(
+                "Pillow não instalado",
+                "Para exibir fotos personalizadas instale o Pillow:\n\n"
+                "    pip install Pillow"
+            )
+            return
+        path = filedialog.askopenfilename(
+            title=f"Escolher foto para {username}",
+            filetypes=[("Imagens", "*.png *.jpg *.jpeg *.gif *.bmp"),
+                       ("Todos os arquivos", "*.*")]
+        )
+        if path:
+            AVATAR_PATHS[username] = path
+            self.show_profiles()
+
+    def show_password(self, username):
+        self._clear()
+        wrap = tk.Frame(self.container, bg="#1e1e24")
+        wrap.place(relx=0.5, rely=0.5, anchor="center")
+
+        avatar_img = make_avatar_image(username, size=110,
+                                       image_path=AVATAR_PATHS[username],
+                                       dark_mode=True)
+        if avatar_img:
+            self.avatar_refs["_selected"] = avatar_img
+            tk.Label(wrap, image=avatar_img, bg="#1e1e24").pack()
+        else:
+            tk.Label(wrap, text=username[0].upper(), font=("Segoe UI", 44, "bold"),
+                     bg=USERS[username]["color"], fg="white", width=3).pack()
+
+        tk.Label(wrap, text=username, font=("Segoe UI", 20, "bold"),
+                 fg="#ffffff", bg="#1e1e24").pack(pady=(12, 4))
+        tk.Label(wrap, text="Digite a senha para continuar",
+                 font=("Segoe UI", 10), fg="#abb2bf", bg="#1e1e24").pack(pady=(0, 24))
+
+        pw_var = tk.StringVar()
+        entry = tk.Entry(wrap, textvariable=pw_var, show="●",
+                         font=("Segoe UI", 15), bg="#23232c", fg="#ffffff",
+                         insertbackground="#61afef", relief="flat",
+                         justify="center", width=22)
+        entry.pack(ipady=10)
+        entry.focus_set()
+
+        err_label = tk.Label(wrap, text="", font=("Segoe UI", 9),
+                             fg="#e06c75", bg="#1e1e24")
+        err_label.pack(pady=(10, 0))
+
+        btn_row = tk.Frame(wrap, bg="#1e1e24")
+        btn_row.pack(pady=22)
+
+        def try_login():
+            if pw_var.get() == USERS[username]["password"]:
+                self.on_login(username)
+            else:
+                err_label.configure(text="❌ Senha incorreta. Tente novamente.")
+                pw_var.set("")
+                entry.focus_set()
+
+        tk.Button(btn_row, text="Entrar", font=("Segoe UI", 12, "bold"),
+                  bg="#2d6930", fg="white", activebackground="#3d8e41",
+                  activeforeground="white", relief="flat",
+                  padx=34, pady=10, cursor="hand2",
+                  command=try_login).pack(side=tk.LEFT, padx=6)
+
+        tk.Button(btn_row, text="Voltar", font=("Segoe UI", 12),
+                  bg="#3b4048", fg="white", activebackground="#4e5560",
+                  activeforeground="white", relief="flat",
+                  padx=34, pady=10, cursor="hand2",
+                  command=self.show_profiles).pack(side=tk.LEFT, padx=6)
+
+        entry.bind("<Return>", lambda e: try_login())
+        tk.Label(wrap, text="Dica: senha padrão = 123",
+                 font=("Segoe UI", 8), fg="#4b5263",
+                 bg="#1e1e24").pack(pady=(10, 0))
+
+
+# ============================================================
+# ESTADO DO CLP
+# ============================================================
 class PlantPLCState:
-    """
-    Representação em tempo real da Memória do CLP GE Fanuc 90-30
-    e dos atuadores/sensores físicos da bancada FESTO.
-    """
     def __init__(self):
-        # Entradas Físicas (%I) e Virtuais (%M)
-        self.I_START = False         # %I0001 / %M0300
-        self.I_RESET = False         # %I0002 / %M0304
-        self.I_POSITION = False      # %I0003 / %M0302
-        self.I_STOP = False          # %I0004 / %M0301
-        self.I_AUTO_MANUAL = True    # %I0005 / %M0305 (True = Auto, False = Manual)
-        self.I_AUTO_MANUAL_PHYS = True # Chave física local
-        self.I_QUIT = False          # %I0006 / %M0303
-        self.I_EMERGENCY = True      # %I0008 (NF: True = Normal/Fechado, False = Pressionado/Aberto)
-        
-        # Sensores de campo (%I)
-        self.I_TABLE_IND = True      # %I0009 Sensor indutivo posição 90º da mesa (NA)
-        self.I_DRILL_UP = True       # %I0010 Fim de curso superior furadeira (NA)
-        self.I_DRILL_DOWN = False    # %I0011 Fim de curso inferior furadeira (NA)
-        self.I_TEST_UP = True        # %I0012 Fim de curso superior do teste (NA)
-        self.I_TEST_DOWN = False     # %I0013 Fim de curso inferior do teste (NA)
-        self.I_CLAMP_RELEASED = True # %I0014 Peça liberada (NA)
-        self.I_CLAMP_LOCKED = False  # %I0015 Peça travada (NA)
-        self.I_PART_PRESENT = False  # %I0016 Sensor reflexivo presença na entrada (NA)
+        self.I_START = False
+        self.I_RESET = False
+        self.I_POSITION = False
+        self.I_STOP = False
+        self.I_AUTO_MANUAL = True
+        self.I_AUTO_MANUAL_PHYS = True
+        self.I_QUIT = False
+        self.I_EMERGENCY = True  # Emergência é NF - apenas física
 
-        # Saídas Físicas (%Q)
-        self.Q_DRILL_MOTOR = False   # %Q0001 Motor rotação furadeira
-        self.Q_TABLE_MOTOR = False   # %Q0002 Motor rotação mesa
-        self.Q_DRILL_DOWN = False    # %Q0003 Solenoide descida furadeira
-        self.Q_DRILL_UP = False      # %Q0004 Solenoide subida furadeira
-        self.Q_TEST_DOWN = False     # %Q0005 Solenoide descida teste
-        self.Q_CLAMP_LOCK = False    # %Q0006 Solenoide avanço trava
+        self.I_TABLE_IND = True
+        self.I_DRILL_UP = True
+        self.I_DRILL_DOWN = False
+        self.I_TEST_UP = True
+        self.I_TEST_DOWN = False
+        self.I_CLAMP_RELEASED = True
+        self.I_CLAMP_LOCKED = False
+        self.I_PART_PRESENT = False
 
-        # Registradores (%R)
-        self.R_DRILLED_COUNT = 0     # %R0100 Peças furadas com sucesso
-        self.R_REJECT_COUNT = 0      # %R0104 Peças não furadas / rejeitadas
+        self.Q_DRILL_MOTOR = False
+        self.Q_TABLE_MOTOR = False
+        self.Q_DRILL_DOWN = False
+        self.Q_DRILL_UP = False
+        self.Q_TEST_DOWN = False
+        self.Q_CLAMP_LOCK = False
 
-        # Estado mecânico contínuo da planta (para renderização visual)
-        # Posições na mesa: 0 = Entrada, 1 = Furação, 2 = Teste, 3 = Saída
-        # Cada posição pode ter: None (vazio), ou dict com propriedades da peça
+        self.R_DRILLED_COUNT = 0
+        self.R_REJECT_COUNT = 0
+
         self.table_slots = [None, None, None, None]
-        self.table_angle = 0.0       # Ângulo atual da mesa (0 a 360 graus)
+        self.table_angle = 0.0
         self.target_table_angle = 0.0
         self.table_moving = False
-
-        # Posição física da furadeira (0.0 = Topo, 1.0 = Fundo atingido)
         self.drill_pos = 0.0
-        # Rotação da broca
         self.drill_rpm_angle = 0.0
-
-        # Posição física da trava (0.0 = Liberada, 1.0 = Travada)
         self.clamp_pos = 0.0
-
-        # Posição física do testador (0.0 = Topo, 1.0 = Fundo atingido)
         self.test_pos = 0.0
 
-        # Lógica de controle interna do CLP
-        self.mode = "STANDBY"        # STANDBY, AUTO_RUNNING, MANUAL, STOPPED, EMERGENCY
+        self.mode = "STANDBY"
         self.auto_step = 0
         self.manual_step = 0
         self.test_timer_start = 0.0
         self.drill_spin_delay = 0.0
 
-        # Injeção de defeitos para testes de validação
-        self.fault_drill_blocked = False # Simula que a broca não consegue furar peça dura
-        self.auto_feed_enabled = False   # Insere novas peças automaticamente
+        self.fault_drill_blocked = False
+        self.auto_feed_enabled = False
 
+
+# ============================================================
+# APLICAÇÃO PRINCIPAL
+# ============================================================
 class FestoScadaApp:
-    def __init__(self, root):
+    def __init__(self, root, username="Operador", on_logout=None):
         self.root = root
+        self.current_user = username
+        self.on_logout = on_logout
+        self.dark_mode = True
+        self.theme = THEMES["dark"]
+
         self.root.title("SCADA - Estação de Furação FESTO | Indústria 4.0 (UNIFEI)")
-        self.root.geometry("1260x820")
-        self.root.minsize(1100, 750)
-        self.root.configure(bg="#1e1e24")
+        self.root.geometry("1320x860")
+        self.root.minsize(1150, 780)
+        self.root.configure(bg=self.theme["bg_root"])
 
         self.plc = PlantPLCState()
         self.log_messages = []
+        self._last_datetime = ""
 
         self.setup_styles()
         self.build_ui()
-        
-        # Registrar evento de inicialização
-        self.log_event("SISTEMA", "Supervisório SCADA iniciado. Comunicação simulador ativa.")
 
-        # Iniciar thread/loop de execução de ciclo
+        self.log_event("SISTEMA", f"Supervisório iniciado. Operador: {self.current_user}.")
+
         self.running = True
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after_id = self.root.after(40, self.update_cycle)
 
     def setup_styles(self):
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TFrame", background="#1e1e24")
-        style.configure("Header.TLabel", background="#1e1e24", foreground="#ffffff", font=("Segoe UI", 16, "bold"))
-        style.configure("SubHeader.TLabel", background="#1e1e24", foreground="#a0a0b0", font=("Segoe UI", 10))
-        style.configure("Panel.TFrame", background="#2b2b36", relief="ridge")
-        style.configure("Card.TFrame", background="#23232c", relief="solid", borderwidth=1)
-        style.configure("CardTitle.TLabel", background="#23232c", foreground="#61afef", font=("Segoe UI", 10, "bold"))
-        style.configure("Value.TLabel", background="#23232c", foreground="#98c379", font=("Consolas", 14, "bold"))
 
+    # --------------------------------------------------------
+    # CONSTRUÇÃO DA UI
+    # --------------------------------------------------------
     def build_ui(self):
-        # 1. Top Bar / Header
-        top_bar = tk.Frame(self.root, bg="#18181f", height=60)
-        top_bar.pack(fill=tk.X, side=tk.TOP, padx=0, pady=0)
+        t = self.theme
+        self.root.configure(bg=t["bg_root"])
 
-        title_box = tk.Frame(top_bar, bg="#18181f")
+        # ===== TOP BAR =====
+        top_bar = tk.Frame(self.root, bg=t["bg_header"], height=64)
+        top_bar.pack(fill=tk.X, side=tk.TOP)
+        top_bar.pack_propagate(False)
+
+        title_box = tk.Frame(top_bar, bg=t["bg_header"])
         title_box.pack(side=tk.LEFT, padx=16, pady=8)
-        lbl_title = tk.Label(title_box, text="ESTAÇÃO DE FURAÇÃO FESTO", font=("Segoe UI", 14, "bold"), fg="#ffffff", bg="#18181f")
-        lbl_title.pack(anchor="w")
-        lbl_sub = tk.Label(title_box, text="UNIFEI • ECAA02A SCADA • CLP GE Fanuc Série 90-30 (SNP)", font=("Segoe UI", 9), fg="#8c8d9a", bg="#18181f")
-        lbl_sub.pack(anchor="w")
+        tk.Label(title_box, text="ESTAÇÃO DE FURAÇÃO FESTO",
+                 font=("Segoe UI", 14, "bold"),
+                 fg=t["fg_primary"], bg=t["bg_header"]).pack(anchor="w")
+        tk.Label(title_box, text="UNIFEI • ECAA02A SCADA • CLP GE Fanuc Série 90-30 (SNP)",
+                 font=("Segoe UI", 9), fg=t["fg_dim"], bg=t["bg_header"]).pack(anchor="w")
 
-        # Status do Modo e Comunicação no Header
-        status_box = tk.Frame(top_bar, bg="#18181f")
-        status_box.pack(side=tk.RIGHT, padx=16, pady=8)
+        right_group = tk.Frame(top_bar, bg=t["bg_header"])
+        right_group.pack(side=tk.RIGHT, padx=16, pady=8)
 
-        self.lbl_comm_status = tk.Label(status_box, text="● COM ONLINE (SNP: COM1/19200)", font=("Segoe UI", 9, "bold"), fg="#98c379", bg="#18181f")
-        self.lbl_comm_status.pack(side=tk.RIGHT, padx=10)
+        # 1) Perfil (avatar + nome) — display, sem clique de foto
+        self._build_profile_display(right_group)
 
-        self.lbl_mode_badge = tk.Label(status_box, text="MODO: STANDBY", font=("Segoe UI", 10, "bold"), fg="#e5c07b", bg="#332e1d", padx=10, pady=4, relief="ridge")
-        self.lbl_mode_badge.pack(side=tk.RIGHT, padx=10)
+        # 2) Botão SAIR (logout/switch account)
+        tk.Button(right_group, text="⏻ Sair", font=("Segoe UI", 9, "bold"),
+                  bg=t["btn_secondary"], fg=t["accent_red"],
+                  activebackground=t["accent_red"], activeforeground="#ffffff",
+                  relief="flat", bd=0, cursor="hand2", padx=10, pady=5,
+                  command=self.cmd_logout).pack(side=tk.RIGHT, padx=6)
 
-        # 2. Container Central dividido em duas colunas:
-        # Coluna Esquerda: Sinótico Animado da Planta (Mesa, Furadeira, Testador, Sensores)
-        # Coluna Direita: Painel de Controle Operacional, Tag Monitor e Alarmes
-        main_container = tk.Frame(self.root, bg="#1e1e24")
+        # 3) Toggle Tema
+        tk.Button(right_group, text=("☀" if self.dark_mode else "🌙"),
+                  font=("Segoe UI", 13),
+                  bg=t["bg_header"], fg=t["accent_yellow"],
+                  activebackground=t["bg_panel"], activeforeground=t["accent_yellow"],
+                  relief="flat", bd=0, cursor="hand2", padx=6, pady=2,
+                  command=self.toggle_theme).pack(side=tk.RIGHT, padx=6)
+
+        # 4) Data/Hora
+        self.lbl_datetime = tk.Label(right_group, text="", font=("Consolas", 10),
+                                     fg=t["fg_secondary"], bg=t["bg_header"])
+        self.lbl_datetime.pack(side=tk.RIGHT, padx=10)
+        self.update_datetime(force=True)
+
+        # 5) COM status
+        tk.Label(right_group, text="● COM ONLINE", font=("Segoe UI", 9, "bold"),
+                 fg=t["accent_green"], bg=t["bg_header"]).pack(side=tk.RIGHT, padx=8)
+
+        # 6) Modo badge
+        self.lbl_mode_badge = tk.Label(right_group, text="MODO: STANDBY",
+                                       font=("Segoe UI", 10, "bold"),
+                                       fg=t["accent_yellow"],
+                                       bg=self._mode_badge_bg("STANDBY"),
+                                       padx=10, pady=4, relief="ridge")
+        self.lbl_mode_badge.pack(side=tk.RIGHT, padx=6)
+
+        # ===== CONTAINER CENTRAL =====
+        main_container = tk.Frame(self.root, bg=t["bg_root"])
         main_container.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
-        # Coluna Esquerda: Sinótico
-        left_col = tk.Frame(main_container, bg="#262630", bd=1, relief="solid")
+        # Sinótico (esquerda)
+        left_col = tk.Frame(main_container, bg=t["bg_panel"], bd=1, relief="solid")
         left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
-        canvas_header = tk.Frame(left_col, bg="#202029", height=32)
+        canvas_header = tk.Frame(left_col, bg=t["bg_panel_alt"], height=32)
         canvas_header.pack(fill=tk.X)
-        tk.Label(canvas_header, text="SINÓTICO EM TEMPO REAL - BANCADA DE PROCESSO", font=("Segoe UI", 10, "bold"), fg="#abb2bf", bg="#202029").pack(side=tk.LEFT, padx=10, pady=4)
+        tk.Label(canvas_header, text="SINÓTICO EM TEMPO REAL - BANCADA DE PROCESSO",
+                 font=("Segoe UI", 10, "bold"),
+                 fg=t["fg_secondary"], bg=t["bg_panel_alt"]).pack(side=tk.LEFT, padx=10, pady=4)
 
-        # Canvas da Planta
-        self.canvas = tk.Canvas(left_col, bg="#1a1a22", highlightthickness=0)
+        self.canvas = tk.Canvas(left_col, bg=t["bg_canvas"], highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        # Legenda do Canvas
-        legend_frame = tk.Frame(left_col, bg="#202029", height=28)
+        legend_frame = tk.Frame(left_col, bg=t["bg_panel_alt"], height=28)
         legend_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
-        tk.Label(legend_frame, text="Legenda: [E] Entrada  |  [F] Furação  |  [T] Teste de Furo  |  [S] Saída de Peças", font=("Segoe UI", 8), fg="#abb2bf", bg="#202029").pack(side=tk.LEFT, padx=8, pady=2)
+        tk.Label(legend_frame,
+                 text="Legenda: [E] Entrada  |  [F] Furação  |  [T] Teste de Furo  |  [S] Saída",
+                 font=("Segoe UI", 8), fg=t["fg_secondary"],
+                 bg=t["bg_panel_alt"]).pack(side=tk.LEFT, padx=8, pady=2)
 
-        # Coluna Direita: Controles e Painéis
-        right_col = tk.Frame(main_container, bg="#1e1e24", width=460)
+        # Painéis (direita)
+        right_col = tk.Frame(main_container, bg=t["bg_root"], width=460)
         right_col.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(6, 0))
         right_col.pack_propagate(False)
 
-        # 2.1 Painel de Contadores / KPIs
-        kpi_frame = tk.Frame(right_col, bg="#23232c", bd=1, relief="solid")
+        # KPIs
+        kpi_frame = tk.Frame(right_col, bg=t["bg_panel"], bd=1, relief="solid")
         kpi_frame.pack(fill=tk.X, pady=(0, 8))
-        
-        tk.Label(kpi_frame, text="INDICADORES DE PRODUÇÃO (%R0100 / %R0104)", font=("Segoe UI", 9, "bold"), fg="#61afef", bg="#23232c").pack(anchor="w", padx=10, pady=(6, 4))
-        
-        kpi_grid = tk.Frame(kpi_frame, bg="#23232c")
+        tk.Label(kpi_frame, text="INDICADORES DE PRODUÇÃO (%R0100 / %R0104)",
+                 font=("Segoe UI", 9, "bold"),
+                 fg=t["accent_blue"], bg=t["bg_panel"]).pack(anchor="w", padx=10, pady=(6, 4))
+
+        kpi_grid = tk.Frame(kpi_frame, bg=t["bg_panel"])
         kpi_grid.pack(fill=tk.X, padx=10, pady=(0, 8))
 
-        # KPI Aprovadas
-        k1 = tk.Frame(kpi_grid, bg="#1d2d25", bd=1, relief="groove")
+        k1 = tk.Frame(kpi_grid, bg=t["bg_card_ok"], bd=1, relief="groove")
         k1.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
-        tk.Label(k1, text="FURADAS (OK)", font=("Segoe UI", 8, "bold"), fg="#98c379", bg="#1d2d25").pack(pady=(4, 0))
-        self.lbl_kpi_ok = tk.Label(k1, text="0", font=("Consolas", 18, "bold"), fg="#98c379", bg="#1d2d25")
+        tk.Label(k1, text="FURADAS (OK)", font=("Segoe UI", 8, "bold"),
+                 fg=t["accent_green"], bg=t["bg_card_ok"]).pack(pady=(4, 0))
+        self.lbl_kpi_ok = tk.Label(k1, text="0", font=("Consolas", 18, "bold"),
+                                   fg=t["accent_green"], bg=t["bg_card_ok"])
         self.lbl_kpi_ok.pack(pady=(0, 4))
 
-        # KPI Rejeitadas
-        k2 = tk.Frame(kpi_grid, bg="#331e21", bd=1, relief="groove")
+        k2 = tk.Frame(kpi_grid, bg=t["bg_card_nok"], bd=1, relief="groove")
         k2.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-        tk.Label(k2, text="NÃO FURADAS (NOK)", font=("Segoe UI", 8, "bold"), fg="#e06c75", bg="#331e21").pack(pady=(4, 0))
-        self.lbl_kpi_nok = tk.Label(k2, text="0", font=("Consolas", 18, "bold"), fg="#e06c75", bg="#331e21")
+        tk.Label(k2, text="NÃO FURADAS (NOK)", font=("Segoe UI", 8, "bold"),
+                 fg=t["accent_red"], bg=t["bg_card_nok"]).pack(pady=(4, 0))
+        self.lbl_kpi_nok = tk.Label(k2, text="0", font=("Consolas", 18, "bold"),
+                                    fg=t["accent_red"], bg=t["bg_card_nok"])
         self.lbl_kpi_nok.pack(pady=(0, 4))
 
-        # KPI Total e Eficiência
-        k3 = tk.Frame(kpi_grid, bg="#1e2638", bd=1, relief="groove")
+        k3 = tk.Frame(kpi_grid, bg=t["bg_card_rate"], bd=1, relief="groove")
         k3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
-        tk.Label(k3, text="TAXA APROVAÇÃO", font=("Segoe UI", 8, "bold"), fg="#61afef", bg="#1e2638").pack(pady=(4, 0))
-        self.lbl_kpi_rate = tk.Label(k3, text="100 %", font=("Consolas", 18, "bold"), fg="#61afef", bg="#1e2638")
+        tk.Label(k3, text="TAXA APROVAÇÃO", font=("Segoe UI", 8, "bold"),
+                 fg=t["accent_blue"], bg=t["bg_card_rate"]).pack(pady=(4, 0))
+        self.lbl_kpi_rate = tk.Label(k3, text="100 %", font=("Consolas", 18, "bold"),
+                                     fg=t["accent_blue"], bg=t["bg_card_rate"])
         self.lbl_kpi_rate.pack(pady=(0, 4))
 
-        # 2.2 Painel de Comando da IHM (Botoeiras Virtuais %M)
-        ctrl_frame = tk.Frame(right_col, bg="#23232c", bd=1, relief="solid")
+        # Botoeiras
+        ctrl_frame = tk.Frame(right_col, bg=t["bg_panel"], bd=1, relief="solid")
         ctrl_frame.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(ctrl_frame, text="BOTOEIRAS DO SUPERVISÓRIO (%M0300..%M0305)",
+                 font=("Segoe UI", 9, "bold"),
+                 fg=t["accent_blue"], bg=t["bg_panel"]).pack(anchor="w", padx=10, pady=(6, 4))
 
-        tk.Label(ctrl_frame, text="BOTOEIRAS DO SUPERVISÓRIO (%M0300..%M0305)", font=("Segoe UI", 9, "bold"), fg="#61afef", bg="#23232c").pack(anchor="w", padx=10, pady=(6, 4))
-
-        # Chave seletora Auto/Manual
-        sel_row = tk.Frame(ctrl_frame, bg="#23232c")
+        sel_row = tk.Frame(ctrl_frame, bg=t["bg_panel"])
         sel_row.pack(fill=tk.X, padx=10, pady=4)
-        tk.Label(sel_row, text="Chave Auto/Manual (%M0305):", font=("Segoe UI", 9), fg="#abb2bf", bg="#23232c").pack(side=tk.LEFT)
-        
-        self.btn_mode_auto = tk.Button(sel_row, text="AUTOMÁTICO", font=("Segoe UI", 8, "bold"), bg="#355c3d", fg="#ffffff", activebackground="#45784f", relief="raised", bd=2, command=self.cmd_set_auto)
+        tk.Label(sel_row, text="Chave Auto/Manual (%M0305):",
+                 font=("Segoe UI", 9), fg=t["fg_secondary"],
+                 bg=t["bg_panel"]).pack(side=tk.LEFT)
+
+        self.btn_mode_auto = tk.Button(sel_row, text="AUTOMÁTICO",
+                                       font=("Segoe UI", 8, "bold"),
+                                       bg="#355c3d", fg="#ffffff",
+                                       activebackground="#45784f",
+                                       relief="raised", bd=2,
+                                       command=self.cmd_set_auto)
         self.btn_mode_auto.pack(side=tk.RIGHT, padx=2)
-        self.btn_mode_manual = tk.Button(sel_row, text="MANUAL", font=("Segoe UI", 8, "bold"), bg="#414552", fg="#ffffff", activebackground="#565c6d", relief="raised", bd=2, command=self.cmd_set_manual)
+        self.btn_mode_manual = tk.Button(sel_row, text="MANUAL",
+                                         font=("Segoe UI", 8, "bold"),
+                                         bg="#414552", fg="#ffffff",
+                                         activebackground="#565c6d",
+                                         relief="raised", bd=2,
+                                         command=self.cmd_set_manual)
         self.btn_mode_manual.pack(side=tk.RIGHT, padx=2)
 
-        # Botões operacionais (START, STOP, RESET, QUIT, POSITION, EMERGENCY)
-        btn_grid1 = tk.Frame(ctrl_frame, bg="#23232c")
+        btn_grid1 = tk.Frame(ctrl_frame, bg=t["bg_panel"])
         btn_grid1.pack(fill=tk.X, padx=10, pady=4)
 
-        self.btn_start = tk.Button(btn_grid1, text="START (%M0300)", font=("Segoe UI", 9, "bold"), bg="#2d6930", fg="#ffffff", activebackground="#3d8e41", height=2, relief="raised", bd=3, command=self.cmd_start)
+        self.btn_start = tk.Button(btn_grid1, text="START (%M0300)",
+                                   font=("Segoe UI", 9, "bold"),
+                                   bg="#2d6930", fg="#ffffff",
+                                   activebackground="#3d8e41",
+                                   height=2, relief="raised", bd=3,
+                                   command=self.cmd_start)
         self.btn_start.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
 
-        self.btn_stop = tk.Button(btn_grid1, text="STOP (%M0301)", font=("Segoe UI", 9, "bold"), bg="#8f2d2d", fg="#ffffff", activebackground="#b83939", height=2, relief="raised", bd=3, command=self.cmd_stop)
+        self.btn_stop = tk.Button(btn_grid1, text="STOP (%M0301)",
+                                  font=("Segoe UI", 9, "bold"),
+                                  bg="#8f2d2d", fg="#ffffff",
+                                  activebackground="#b83939",
+                                  height=2, relief="raised", bd=3,
+                                  command=self.cmd_stop)
         self.btn_stop.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
 
-        self.btn_reset = tk.Button(btn_grid1, text="RESET (%M0304)", font=("Segoe UI", 9, "bold"), bg="#826620", fg="#ffffff", activebackground="#a68429", height=2, relief="raised", bd=3, command=self.cmd_reset)
+        self.btn_reset = tk.Button(btn_grid1, text="RESET (%M0304)",
+                                   font=("Segoe UI", 9, "bold"),
+                                   bg="#826620", fg="#ffffff",
+                                   activebackground="#a68429",
+                                   height=2, relief="raised", bd=3,
+                                   command=self.cmd_reset)
         self.btn_reset.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
 
-        btn_grid2 = tk.Frame(ctrl_frame, bg="#23232c")
+        # Linha 2: POSITION + QUIT (emergência removida — apenas física)
+        btn_grid2 = tk.Frame(ctrl_frame, bg=t["bg_panel"])
         btn_grid2.pack(fill=tk.X, padx=10, pady=(2, 6))
 
-        self.btn_pos = tk.Button(btn_grid2, text="POSITION (%M0302)", font=("Segoe UI", 8, "bold"), bg="#3b4048", fg="#ffffff", activebackground="#4e5560", relief="raised", bd=2, command=self.cmd_position)
+        self.btn_pos = tk.Button(btn_grid2, text="POSITION (%M0302)",
+                                 font=("Segoe UI", 8, "bold"),
+                                 bg=t["btn_secondary"], fg="#ffffff",
+                                 activebackground=t["btn_secondary_active"],
+                                 relief="raised", bd=2,
+                                 command=self.cmd_position)
         self.btn_pos.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
 
-        self.btn_quit = tk.Button(btn_grid2, text="QUIT (%M0303)", font=("Segoe UI", 8, "bold"), bg="#3b4048", fg="#ffffff", activebackground="#4e5560", relief="raised", bd=2, command=self.cmd_quit)
-        self.btn_quit.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
+        self.btn_quit = tk.Button(btn_grid2, text="QUIT (%M0303)",
+                                  font=("Segoe UI", 8, "bold"),
+                                  bg=t["btn_secondary"], fg="#ffffff",
+                                  activebackground=t["btn_secondary_active"],
+                                  relief="raised", bd=2,
+                                  command=self.cmd_quit)
+        self.btn_quit.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
 
-        self.btn_emerg = tk.Button(btn_grid2, text="EMERGÊNCIA", font=("Segoe UI", 8, "bold"), bg="#bd1919", fg="#ffffff", activebackground="#e62020", relief="raised", bd=2, command=self.cmd_emergency)
-        self.btn_emerg.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(3, 0))
-
-        # 2.3 Simulação de Planta / Injeção de Peças e Falhas
-        sim_frame = tk.Frame(right_col, bg="#23232c", bd=1, relief="solid")
+        # Simulação
+        sim_frame = tk.Frame(right_col, bg=t["bg_panel"], bd=1, relief="solid")
         sim_frame.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(sim_frame, text="INTERAÇÃO DE BANCADA & ALIMENTAÇÃO",
+                 font=("Segoe UI", 9, "bold"),
+                 fg=t["accent_orange"], bg=t["bg_panel"]).pack(anchor="w", padx=10, pady=(6, 4))
 
-        tk.Label(sim_frame, text="INTERAÇÃO DE BANCADA & ALIMENTAÇÃO", font=("Segoe UI", 9, "bold"), fg="#d19a66", bg="#23232c").pack(anchor="w", padx=10, pady=(6, 4))
-        
-        sim_row = tk.Frame(sim_frame, bg="#23232c")
+        sim_row = tk.Frame(sim_frame, bg=t["bg_panel"])
         sim_row.pack(fill=tk.X, padx=10, pady=(0, 6))
 
-        btn_feed = tk.Button(sim_row, text="＋ Inserir Peça na Entrada", font=("Segoe UI", 8, "bold"), bg="#2e4d6d", fg="#ffffff", relief="groove", command=self.cmd_insert_piece)
-        btn_feed.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        tk.Button(sim_row, text="＋ Inserir Peça na Entrada",
+                  font=("Segoe UI", 8, "bold"),
+                  bg="#2e4d6d", fg="#ffffff", relief="groove",
+                  command=self.cmd_insert_piece).pack(side=tk.LEFT, fill=tk.X,
+                                                       expand=True, padx=(0, 4))
 
-        self.btn_autofeed = tk.Button(sim_row, text="Auto-Alimentação: OFF", font=("Segoe UI", 8), bg="#3b4048", fg="#dcdfe4", relief="groove", command=self.cmd_toggle_autofeed)
+        self.btn_autofeed = tk.Button(sim_row, text="Auto-Alimentação: OFF",
+                                      font=("Segoe UI", 8),
+                                      bg=t["btn_secondary"], fg="#dcdfe4",
+                                      relief="groove",
+                                      command=self.cmd_toggle_autofeed)
         self.btn_autofeed.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
 
-        self.btn_fault = tk.Button(sim_row, text="Falha de Furo: OFF", font=("Segoe UI", 8), bg="#3b4048", fg="#dcdfe4", relief="groove", command=self.cmd_toggle_fault)
+        self.btn_fault = tk.Button(sim_row, text="Falha de Furo: OFF",
+                                   font=("Segoe UI", 8),
+                                   bg=t["btn_secondary"], fg="#dcdfe4",
+                                   relief="groove",
+                                   command=self.cmd_toggle_fault)
         self.btn_fault.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
-        # 2.4 Monitor de Tags de I/O em tempo real
-        io_frame = tk.Frame(right_col, bg="#23232c", bd=1, relief="solid")
+        # I/O Diagnóstico
+        io_frame = tk.Frame(right_col, bg=t["bg_panel"], bd=1, relief="solid")
         io_frame.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(io_frame, text="DIAGNÓSTICO DE I/O (%I e %Q)",
+                 font=("Segoe UI", 9, "bold"),
+                 fg=t["accent_blue"], bg=t["bg_panel"]).pack(anchor="w", padx=10, pady=(6, 4))
 
-        tk.Label(io_frame, text="DIAGNÓSTICO DE I/O (%I e %Q)", font=("Segoe UI", 9, "bold"), fg="#61afef", bg="#23232c").pack(anchor="w", padx=10, pady=(6, 4))
-
-        self.led_canvas = tk.Canvas(io_frame, bg="#1a1a22", height=135, highlightthickness=0)
+        self.led_canvas = tk.Canvas(io_frame, bg=t["bg_canvas"], height=135,
+                                    highlightthickness=0)
         self.led_canvas.pack(fill=tk.X, padx=8, pady=(0, 6))
 
-        # 2.5 Log de Eventos e Alarmes
-        log_frame = tk.Frame(right_col, bg="#23232c", bd=1, relief="solid")
+        # Log
+        log_frame = tk.Frame(right_col, bg=t["bg_panel"], bd=1, relief="solid")
         log_frame.pack(fill=tk.BOTH, expand=True)
+        tk.Label(log_frame, text="HISTÓRICO DE EVENTOS E ALARMES",
+                 font=("Segoe UI", 9, "bold"),
+                 fg=t["accent_yellow"], bg=t["bg_panel"]).pack(anchor="w", padx=10, pady=(6, 2))
 
-        tk.Label(log_frame, text="HISTÓRICO DE EVENTOS E ALARMES", font=("Segoe UI", 9, "bold"), fg="#e5c07b", bg="#23232c").pack(anchor="w", padx=10, pady=(6, 2))
-
-        self.log_listbox = tk.Listbox(log_frame, bg="#181820", fg="#abb2bf", font=("Consolas", 8), selectbackground="#2c313a", relief="flat")
+        self.log_listbox = tk.Listbox(log_frame, bg=t["bg_input"],
+                                       fg=t["fg_secondary"],
+                                       font=("Consolas", 8),
+                                       selectbackground="#2c313a",
+                                       relief="flat")
         self.log_listbox.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 6))
 
-    def log_event(self, source, msg):
-        t_str = time.strftime("%H:%M:%S")
-        entry = f"[{t_str}] [{source}] {msg}"
-        self.log_messages.append(entry)
-        if hasattr(self, 'log_listbox'):
-            self.log_listbox.insert(tk.END, entry)
-            self.log_listbox.see(tk.END)
+    # --------------------------------------------------------
+    # HELPERS
+    # --------------------------------------------------------
+    def _build_profile_display(self, parent):
+        t = self.theme
+        profile_frame = tk.Frame(parent, bg=t["bg_header"])
+        profile_frame.pack(side=tk.RIGHT, padx=(4, 0))
 
-    # Comandos dos botões da IHM
+        avatar_img = make_avatar_image(self.current_user, size=34,
+                                       image_path=AVATAR_PATHS.get(self.current_user),
+                                       dark_mode=self.dark_mode)
+        if avatar_img:
+            self.header_avatar_ref = avatar_img
+            tk.Label(profile_frame, image=avatar_img,
+                     bg=t["bg_header"]).pack(side=tk.RIGHT)
+        else:
+            tk.Label(profile_frame, text=self.current_user[0].upper(),
+                     font=("Segoe UI", 13, "bold"),
+                     bg=USERS[self.current_user]["color"], fg="white",
+                     width=2).pack(side=tk.RIGHT)
+
+        tk.Label(profile_frame, text=self.current_user,
+                 font=("Segoe UI", 10, "bold"),
+                 fg=t["fg_primary"], bg=t["bg_header"]).pack(side=tk.RIGHT, padx=(6, 0))
+
+    def _mode_badge_bg(self, mode):
+        if not self.dark_mode:
+            return {"AUTO_RUNNING": "#dcf0e0", "MANUAL": "#fef3d0",
+                    "EMERGENCY": "#fadada", "STOPPED": "#fadada",
+                    "STANDBY": "#e8e8ee"}.get(mode, "#e8e8ee")
+        return {"AUTO_RUNNING": "#1b4427", "MANUAL": "#473b18",
+                "EMERGENCY": "#5c1d1d", "STOPPED": "#3d2222",
+                "STANDBY": "#282c34"}.get(mode, "#282c34")
+
+    # --------------------------------------------------------
+    # TEMA / LOGOUT
+    # --------------------------------------------------------
+    def toggle_theme(self):
+        self.dark_mode = not self.dark_mode
+        self.theme = THEMES["dark" if self.dark_mode else "light"]
+        self.rebuild_ui()
+        self.log_event("IHM", f"Tema alterado para {'ESCURO' if self.dark_mode else 'CLARO'}.")
+
+    def rebuild_ui(self):
+        saved_logs = list(self.log_messages)
+        for child in self.root.winfo_children():
+            child.destroy()
+        self.setup_styles()
+        self.build_ui()
+        for entry in saved_logs:
+            if hasattr(self, "log_listbox") and self.log_listbox.winfo_exists():
+                self.log_listbox.insert(tk.END, entry)
+        self.update_kpis()
+        self.render_synoptic()
+        self.render_io_leds()
+
+    def cmd_logout(self):
+        if not messagebox.askyesno("Sair da conta",
+                                   f"Deseja sair da conta de {self.current_user}?"):
+            return
+        self.running = False
+        if hasattr(self, "after_id"):
+            try:
+                self.root.after_cancel(self.after_id)
+            except Exception:
+                pass
+        if self.on_logout:
+            self.on_logout()
+
+    def update_datetime(self, force=False):
+        lbl = getattr(self, "lbl_datetime", None)
+        if not lbl or not lbl.winfo_exists():
+            return
+        now = time.strftime("%d/%m/%Y  %H:%M:%S")
+        if force or self._last_datetime != now:
+            lbl.configure(text=now)
+            self._last_datetime = now
+
+    def on_close(self):
+        self.running = False
+        if hasattr(self, "after_id"):
+            try:
+                self.root.after_cancel(self.after_id)
+            except Exception:
+                pass
+        self.root.destroy()
+
+    # --------------------------------------------------------
+    # COMANDOS
+    # --------------------------------------------------------
     def cmd_start(self):
         if not self.plc.I_EMERGENCY:
             self.log_event("ALERTA", "Comando START rejeitado: Emergência acionada!")
@@ -289,7 +715,6 @@ class FestoScadaApp:
     def cmd_stop(self):
         self.plc.I_STOP = True
         self.plc.mode = "STOPPED"
-        # Desliga todos os atuadores imediatamente
         self.plc.Q_DRILL_MOTOR = False
         self.plc.Q_TABLE_MOTOR = False
         self.plc.Q_DRILL_DOWN = False
@@ -313,7 +738,7 @@ class FestoScadaApp:
                 self.plc.Q_TABLE_MOTOR = True
                 self.plc.table_moving = True
                 self.plc.target_table_angle = (self.plc.table_angle + 90.0) % 360.0
-                self.log_event("MANUAL", "Comando POSITION (%M0302): Iniciando avanço de 90° na mesa.")
+                self.log_event("MANUAL", "Comando POSITION (%M0302): Iniciando avanço de 90°.")
             else:
                 self.log_event("MANUAL", "Mesa já em movimento.")
         else:
@@ -322,64 +747,41 @@ class FestoScadaApp:
     def cmd_quit(self):
         self.plc.I_QUIT = True
         if self.plc.mode == "AUTO_RUNNING":
-            # Verificar se não há mais peças
             has_pieces = any(slot is not None for slot in self.plc.table_slots) or self.plc.I_PART_PRESENT
             if not has_pieces:
                 self.plc.mode = "STANDBY"
-                self.log_event("IHM", "Comando QUIT (%M0303): Modo automático desabilitado (Planta vazia).")
+                self.log_event("IHM", "Comando QUIT (%M0303): Modo automático desabilitado.")
             else:
-                self.log_event("IHM", "QUIT solicitado: Sistema finalizará as peças atuais antes de parar.")
-
-    def cmd_emergency(self):
-        # Toggle emergência
-        self.plc.I_EMERGENCY = not self.plc.I_EMERGENCY
-        if not self.plc.I_EMERGENCY:
-            self.plc.mode = "EMERGENCY"
-            self.plc.Q_DRILL_MOTOR = False
-            self.plc.Q_TABLE_MOTOR = False
-            self.plc.Q_DRILL_DOWN = False
-            self.plc.Q_DRILL_UP = False
-            self.plc.Q_TEST_DOWN = False
-            self.plc.Q_CLAMP_LOCK = False
-            self.btn_emerg.configure(bg="#ff0000", text="EMERGÊNCIA ATIVA!")
-            self.log_event("ALARME CRÍTICO", "BOTAO DE EMERGÊNCIA %I0008 ACIONADO!")
-        else:
-            self.plc.mode = "STANDBY"
-            self.btn_emerg.configure(bg="#bd1919", text="EMERGÊNCIA")
-            self.log_event("SEGURANÇA", "Emergência desarmada. Pressione RESET/START para reiniciar.")
+                self.log_event("IHM", "QUIT solicitado: Sistema finalizará as peças atuais.")
 
     def cmd_set_auto(self):
-        # Prioridade da chave física manual sobre virtual
         if not self.plc.I_AUTO_MANUAL_PHYS:
-            self.log_event("BLOQUEIO", "Comando rejeitado: Chave física local está em MANUAL (prioritária).")
+            self.log_event("BLOQUEIO", "Comando rejeitado: Chave física local em MANUAL (prioritária).")
             return
         self.plc.I_AUTO_MANUAL = True
         self.btn_mode_auto.configure(bg="#355c3d")
         self.btn_mode_manual.configure(bg="#414552")
-        self.log_event("IHM", "Modo selecionado no Supervisório: AUTOMÁTICO.")
+        self.log_event("IHM", "Modo selecionado: AUTOMÁTICO.")
 
     def cmd_set_manual(self):
         self.plc.I_AUTO_MANUAL = False
         self.plc.mode = "MANUAL"
         self.btn_mode_auto.configure(bg="#414552")
         self.btn_mode_manual.configure(bg="#6e622b")
-        # Desliga motores de furação e teste caso estivessem ligados
         self.plc.Q_DRILL_MOTOR = False
         self.plc.Q_DRILL_DOWN = False
         self.plc.Q_TEST_DOWN = False
         self.plc.Q_CLAMP_LOCK = False
-        self.log_event("IHM", "Modo selecionado: MANUAL. Apenas rotações por POSITION permitidas.")
+        self.log_event("IHM", "Modo selecionado: MANUAL.")
 
     def cmd_insert_piece(self):
         if self.plc.table_slots[0] is None:
             self.plc.table_slots[0] = {
-                "drilled": False,
-                "tested": False,
-                "ok": False,
+                "drilled": False, "tested": False, "ok": False,
                 "id": len(self.log_messages) + 1
             }
             self.plc.I_PART_PRESENT = True
-            self.log_event("ALIMENTAÇÃO", "Peça bruta inserida na estação de ENTRADA.")
+            self.log_event("ALIMENTAÇÃO", "Peça bruta inserida na ENTRADA.")
         else:
             self.log_event("ALERTA", "Posição de ENTRADA já ocupada!")
 
@@ -387,130 +789,109 @@ class FestoScadaApp:
         self.plc.auto_feed_enabled = not self.plc.auto_feed_enabled
         if self.plc.auto_feed_enabled:
             self.btn_autofeed.configure(bg="#2e6d44", text="Auto-Alimentação: ON")
-            self.log_event("SIMULAÇÃO", "Alimentação contínua de peças ativada.")
+            self.log_event("SIMULAÇÃO", "Alimentação contínua ativada.")
         else:
-            self.btn_autofeed.configure(bg="#3b4048", text="Auto-Alimentação: OFF")
+            self.btn_autofeed.configure(bg=self.theme["btn_secondary"],
+                                        text="Auto-Alimentação: OFF")
             self.log_event("SIMULAÇÃO", "Alimentação contínua desativada.")
 
     def cmd_toggle_fault(self):
         self.plc.fault_drill_blocked = not self.plc.fault_drill_blocked
         if self.plc.fault_drill_blocked:
             self.btn_fault.configure(bg="#8f2d2d", text="Falha de Furo: ON")
-            self.log_event("DEFEITO", "Injeção de defeito ATIVA: Próxima furação falhará (peça não furada).")
+            self.log_event("DEFEITO", "Injeção de defeito ATIVA.")
         else:
-            self.btn_fault.configure(bg="#3b4048", text="Falha de Furo: OFF")
+            self.btn_fault.configure(bg=self.theme["btn_secondary"],
+                                     text="Falha de Furo: OFF")
             self.log_event("DEFEITO", "Injeção de defeito desativada.")
 
-    # Loop de automação física e controle PLC
+    def log_event(self, source, msg):
+        t_str = time.strftime("%H:%M:%S")
+        entry = f"[{t_str}] [{source}] {msg}"
+        self.log_messages.append(entry)
+        if hasattr(self, "log_listbox") and self.log_listbox.winfo_exists():
+            self.log_listbox.insert(tk.END, entry)
+            self.log_listbox.see(tk.END)
+
+    # --------------------------------------------------------
+    # LOOP DE CONTROLE
+    # --------------------------------------------------------
     def update_cycle(self):
         if not self.running:
             return
-
-        # 1. Executar lógica do CLP
         self.step_plc_logic()
-
-        # 2. Executar física mecânica da planta
         self.step_physical_plant()
-
-        # 3. Desenhar no Canvas e atualizar indicadores
         self.render_synoptic()
         self.render_io_leds()
         self.update_kpis()
-
-        # Agendar próximo ciclo
+        self.update_datetime()
         self.after_id = self.root.after(40, self.update_cycle)
 
     def step_plc_logic(self):
-        # Se emergência ou stop ativo, não avança sequências
         if self.plc.mode in ["EMERGENCY", "STOPPED"]:
             return
 
-        # Atualizar sensor de presença na entrada
         self.plc.I_PART_PRESENT = (self.plc.table_slots[0] is not None)
 
-        # Auto-alimentação
         if self.plc.auto_feed_enabled and self.plc.mode == "AUTO_RUNNING":
             if self.plc.table_slots[0] is None and not self.plc.table_moving:
                 self.plc.table_slots[0] = {
-                    "drilled": False,
-                    "tested": False,
-                    "ok": False,
+                    "drilled": False, "tested": False, "ok": False,
                     "id": int(time.time() * 10) % 1000
                 }
                 self.plc.I_PART_PRESENT = True
 
-        # Máquina de Estados no modo AUTOMÁTICO
         if self.plc.mode == "AUTO_RUNNING":
-            # Passo 0: Aguardando condições para iniciar rotação ou processamento
             if self.plc.auto_step == 0:
-                # Verifica se há peças na mesa
                 has_work = any(slot is not None for slot in self.plc.table_slots)
-                
-                # Se há peça na entrada ou em trânsito, e mesa parada com atuadores recuados:
                 if (has_work or self.plc.I_PART_PRESENT) and not self.plc.table_moving:
-                    # Garantir atuadores recuados antes de girar
                     if self.plc.I_DRILL_UP and self.plc.I_TEST_UP and self.plc.I_CLAMP_RELEASED:
-                        # Se há peça na posição de Furação que ainda não foi furada, OU
-                        # se há peça na posição de Teste que ainda não foi testada:
-                        need_drill = (self.plc.table_slots[1] is not None and not self.plc.table_slots[1]["drilled"])
-                        need_test = (self.plc.table_slots[2] is not None and not self.plc.table_slots[2]["tested"])
-
+                        need_drill = (self.plc.table_slots[1] is not None and
+                                      not self.plc.table_slots[1]["drilled"])
+                        need_test = (self.plc.table_slots[2] is not None and
+                                     not self.plc.table_slots[2]["tested"])
                         if need_drill or need_test:
-                            # Executar operações de bancada (podem ser simultâneas!)
                             self.plc.auto_step = 20
                         else:
-                            # Pode girar a mesa para a próxima posição
-                            # Mas primeiro descarta peça que chegou na saída
                             if self.plc.table_slots[3] is not None:
                                 p = self.plc.table_slots[3]
-                                self.log_event("SAÍDA", f"Peça #{p['id']} coletada na estação de Saída (Status: {'OK' if p['ok'] else 'REJEITO'}).")
+                                self.log_event(
+                                    "SAÍDA",
+                                    f"Peça #{p['id']} coletada (Status: "
+                                    f"{'OK' if p['ok'] else 'REJEITO'})."
+                                )
                                 self.plc.table_slots[3] = None
-
-                            # Iniciar rotação de 90°
                             self.plc.auto_step = 10
                             self.plc.Q_TABLE_MOTOR = True
                             self.plc.table_moving = True
                             self.plc.target_table_angle = (self.plc.table_angle + 90.0) % 360.0
-                            self.log_event("MESA", "Avanço de 90° iniciado pelo ciclo automático.")
+                            self.log_event("MESA", "Avanço de 90° iniciado.")
 
-            # Passo 10: Aguardando mesa terminar rotação de 90°
             elif self.plc.auto_step == 10:
                 if not self.plc.table_moving and self.plc.I_TABLE_IND:
                     self.plc.Q_TABLE_MOTOR = False
-                    # Rotacionar array de peças na mesa: slot 3 sai, 2->3, 1->2, 0->1, 0 fica None
-                    self.plc.table_slots = [None, self.plc.table_slots[0], self.plc.table_slots[1], self.plc.table_slots[2]]
-                    self.log_event("MESA", "Posicionamento 90° concluído (Sensor Indutivo %I0009 atuado).")
+                    self.plc.table_slots = [None, self.plc.table_slots[0],
+                                            self.plc.table_slots[1], self.plc.table_slots[2]]
+                    self.log_event("MESA", "Posicionamento 90° concluído.")
                     self.plc.auto_step = 0
 
-            # Passo 20: Executar Furação e/ou Teste (Simultâneos ou Individuais)
             elif self.plc.auto_step == 20:
-                # 20.1 Controle da Furadeira
                 p_drill = self.plc.table_slots[1]
                 if p_drill is not None and not p_drill["drilled"]:
-                    # Travar peça se ainda não travou
                     if not self.plc.I_CLAMP_LOCKED:
                         self.plc.Q_CLAMP_LOCK = True
                     else:
-                        # Peça travada -> ligar motor da furadeira
                         self.plc.Q_DRILL_MOTOR = True
                         if self.plc.drill_spin_delay < 1.0:
                             self.plc.drill_spin_delay += 0.05
                         else:
-                            # Velocidade nominal atingida -> descer furadeira
-                            if not self.plc.fault_drill_blocked:
-                                self.plc.Q_DRILL_DOWN = True
-                                self.plc.Q_DRILL_UP = False
-                            else:
-                                # Simula broca presa / peça muito dura que não atinge fim de curso
-                                self.plc.Q_DRILL_DOWN = True
-                                self.plc.Q_DRILL_UP = False
-
-                            # Quando atingir fim de curso inferior
+                            self.plc.Q_DRILL_DOWN = True
+                            self.plc.Q_DRILL_UP = False
                             if self.plc.I_DRILL_DOWN:
                                 p_drill["drilled"] = True
-                                self.log_event("FURAÇÃO", f"Furo concluído na peça #{p_drill['id']}. Subindo furadeira.")
+                                self.log_event("FURAÇÃO",
+                                               f"Furo concluído na peça #{p_drill['id']}.")
 
-                # Se a peça na furação já furou (ou não havia peça), recuar furadeira
                 if p_drill is None or p_drill["drilled"] or self.plc.fault_drill_blocked:
                     if self.plc.drill_pos > 0.0:
                         self.plc.Q_DRILL_DOWN = False
@@ -522,52 +903,46 @@ class FestoScadaApp:
                             self.plc.Q_CLAMP_LOCK = False
                             self.plc.drill_spin_delay = 0.0
                             if self.plc.fault_drill_blocked and p_drill and not p_drill["drilled"]:
-                                # Concluiu tentativa com falha
                                 p_drill["drilled"] = True
-                                self.log_event("FURAÇÃO", f"Furadeira abortou descida (Peça #{p_drill['id']} com defeito de dureza).")
+                                self.log_event("FURAÇÃO",
+                                               f"Furadeira abortou (peça #{p_drill['id']} defeituosa).")
 
-                # 20.2 Controle do Testador
                 p_test = self.plc.table_slots[2]
                 if p_test is not None and not p_test["tested"]:
-                    # Descer provador do furo
                     self.plc.Q_TEST_DOWN = True
                     if self.plc.test_timer_start == 0.0:
                         self.plc.test_timer_start = time.time()
-
                     elapsed = time.time() - self.plc.test_timer_start
-                    # Teste 1: Fim de curso inferior atingido?
                     if self.plc.I_TEST_DOWN:
                         p_test["tested"] = True
                         p_test["ok"] = True
                         self.plc.R_DRILLED_COUNT += 1
-                        self.log_event("TESTE", f"Peça #{p_test['id']} APROVADA! (Furo verificado com sucesso - %R0100={self.plc.R_DRILLED_COUNT}).")
+                        self.log_event("TESTE",
+                                       f"Peça #{p_test['id']} APROVADA! (%R0100={self.plc.R_DRILLED_COUNT})")
                         self.plc.Q_TEST_DOWN = False
                         self.plc.test_timer_start = 0.0
                     elif elapsed >= 3.0:
-                        # Timeout de 3 segundos atingido sem atingir o sensor inferior -> REJEITADA
                         p_test["tested"] = True
                         p_test["ok"] = False
                         self.plc.R_REJECT_COUNT += 1
-                        self.log_event("TESTE", f"Peça #{p_test['id']} REJEITADA! (Timeout 3s sem atingir sensor - %R0104={self.plc.R_REJECT_COUNT}).")
+                        self.log_event("TESTE",
+                                       f"Peça #{p_test['id']} REJEITADA! (%R0104={self.plc.R_REJECT_COUNT})")
                         self.plc.Q_TEST_DOWN = False
                         self.plc.test_timer_start = 0.0
                 else:
                     self.plc.Q_TEST_DOWN = False
                     self.plc.test_timer_start = 0.0
 
-                # 20.3 Verificar se ambas as operações finalizaram
-                drill_done = (p_drill is None or (p_drill["drilled"] and self.plc.I_DRILL_UP and self.plc.I_CLAMP_RELEASED))
+                drill_done = (p_drill is None or
+                              (p_drill["drilled"] and self.plc.I_DRILL_UP and self.plc.I_CLAMP_RELEASED))
                 test_done = (p_test is None or (p_test["tested"] and self.plc.I_TEST_UP))
-
                 if drill_done and test_done:
-                    # Ambas concluíram com segurança! Retorna ao passo 0
                     self.plc.auto_step = 0
 
     def step_physical_plant(self):
-        # 1. Movimento da mesa rotativa
         if self.plc.table_moving:
             diff = (self.plc.target_table_angle - self.plc.table_angle) % 360.0
-            if diff > 0.1 and diff <= 95.0:
+            if 0.1 < diff <= 95.0:
                 self.plc.table_angle = (self.plc.table_angle + 6.0) % 360.0
                 self.plc.I_TABLE_IND = False
             else:
@@ -576,10 +951,8 @@ class FestoScadaApp:
                 self.plc.Q_TABLE_MOTOR = False
                 self.plc.I_TABLE_IND = True
 
-        # 2. Movimento da furadeira
         if self.plc.Q_DRILL_DOWN and not self.plc.Q_DRILL_UP:
             if self.plc.fault_drill_blocked:
-                # Trava a descida na metade (não atinge 1.0)
                 if self.plc.drill_pos < 0.45:
                     self.plc.drill_pos += 0.05
             else:
@@ -592,16 +965,13 @@ class FestoScadaApp:
                 self.plc.drill_pos -= 0.08
                 if self.plc.drill_pos <= 0.0:
                     self.plc.drill_pos = 0.0
-        
-        # Sensores de fim de curso da furadeira
+
         self.plc.I_DRILL_UP = (self.plc.drill_pos <= 0.05)
         self.plc.I_DRILL_DOWN = (self.plc.drill_pos >= 0.95)
 
-        # Rotação da broca
         if self.plc.Q_DRILL_MOTOR:
             self.plc.drill_rpm_angle = (self.plc.drill_rpm_angle + 30.0) % 360.0
 
-        # 3. Movimento da trava pneumática
         if self.plc.Q_CLAMP_LOCK:
             if self.plc.clamp_pos < 1.0:
                 self.plc.clamp_pos += 0.15
@@ -616,17 +986,15 @@ class FestoScadaApp:
         self.plc.I_CLAMP_RELEASED = (self.plc.clamp_pos <= 0.05)
         self.plc.I_CLAMP_LOCKED = (self.plc.clamp_pos >= 0.95)
 
-        # 4. Movimento do provador de teste
         if self.plc.Q_TEST_DOWN:
-            # Se a peça embaixo foi furada com sucesso, a haste desce até o fim (1.0)
             p_test = self.plc.table_slots[2]
-            target_depth = 1.0 if (p_test and p_test.get("drilled", False) and not self.plc.fault_drill_blocked) else 0.4
+            target_depth = 1.0 if (p_test and p_test.get("drilled", False)
+                                   and not self.plc.fault_drill_blocked) else 0.4
             if self.plc.test_pos < target_depth:
                 self.plc.test_pos += 0.06
                 if self.plc.test_pos >= target_depth:
                     self.plc.test_pos = target_depth
         else:
-            # Retorno por mola
             if self.plc.test_pos > 0.0:
                 self.plc.test_pos -= 0.1
                 if self.plc.test_pos <= 0.0:
@@ -635,33 +1003,34 @@ class FestoScadaApp:
         self.plc.I_TEST_UP = (self.plc.test_pos <= 0.05)
         self.plc.I_TEST_DOWN = (self.plc.test_pos >= 0.95)
 
-    # Renderização Gráfica do Sinótico da Planta
+    # --------------------------------------------------------
+    # SINÓTICO
+    # --------------------------------------------------------
     def render_synoptic(self):
         c = self.canvas
+        t = self.theme
         w = c.winfo_width()
         h = c.winfo_height()
         if w < 100 or h < 100:
             return
 
         c.delete("all")
-
-        # Fundo do sinótico com grade técnica sutil
-        c.create_rectangle(0, 0, w, h, fill="#181822", outline="")
+        c.create_rectangle(0, 0, w, h, fill=t["canvas_bg"], outline="")
         for gx in range(0, w, 40):
-            c.create_line(gx, 0, gx, h, fill="#1f1f2e", width=1)
+            c.create_line(gx, 0, gx, h, fill=t["grid_line"], width=1)
         for gy in range(0, h, 40):
-            c.create_line(0, gy, w, gy, fill="#1f1f2e", width=1)
+            c.create_line(0, gy, w, gy, fill=t["grid_line"], width=1)
 
-        # Coordenadas centrais da mesa rotativa
         cx = w * 0.48
         cy = h * 0.52
         table_r = min(w, h) * 0.32
 
-        # 1. Base metálica estática da mesa
-        c.create_oval(cx - table_r - 18, cy - table_r - 18, cx + table_r + 18, cy + table_r + 18, fill="#2a2b36", outline="#3c3f50", width=3)
-        c.create_oval(cx - table_r, cy - table_r, cx + table_r, cy + table_r, fill="#343746", outline="#52576b", width=2)
+        c.create_oval(cx - table_r - 18, cy - table_r - 18,
+                      cx + table_r + 18, cy + table_r + 18,
+                      fill="#2a2b36", outline=t["border"], width=3)
+        c.create_oval(cx - table_r, cy - table_r, cx + table_r, cy + table_r,
+                      fill="#343746", outline="#52576b", width=2)
 
-        # Divisões em 4 quadrantes da mesa com rotação
         rad = math.radians(self.plc.table_angle)
         for i in range(4):
             a = rad + (i * math.pi / 2.0)
@@ -669,171 +1038,226 @@ class FestoScadaApp:
             ey = cy + table_r * math.sin(a)
             c.create_line(cx, cy, ex, ey, fill="#20222b", width=2, dash=(4, 2))
 
-        # Cubo central da mesa
-        c.create_oval(cx - 30, cy - 30, cx + 30, cy + 30, fill="#222430", outline="#61afef", width=2)
-        c.create_text(cx, cy, text="MESA\nINDEX", font=("Segoe UI", 7, "bold"), fill="#61afef", justify="center")
+        c.create_oval(cx - 30, cy - 30, cx + 30, cy + 30,
+                      fill="#222430", outline=t["accent_blue"], width=2)
+        c.create_text(cx, cy, text="MESA\nINDEX", font=("Segoe UI", 7, "bold"),
+                      fill=t["accent_blue"], justify="center")
 
-        # Sensor indutivo na mesa (%I0009)
-        c.create_rectangle(cx + table_r + 4, cy - 10, cx + table_r + 26, cy + 10, fill="#3a3d4d", outline="#e5c07b", width=1)
-        c.create_oval(cx + table_r + 7, cy - 5, cx + table_r + 17, cy + 5, fill="#98c379" if self.plc.I_TABLE_IND else "#4b5263", outline="")
-        c.create_text(cx + table_r + 34, cy, text="%I0009\nIndutivo", font=("Consolas", 7), fill="#e5c07b", anchor="w")
+        c.create_rectangle(cx + table_r + 4, cy - 10,
+                           cx + table_r + 26, cy + 10,
+                           fill=t["bg_panel"], outline=t["accent_yellow"], width=1)
+        c.create_oval(cx + table_r + 7, cy - 5,
+                      cx + table_r + 17, cy + 5,
+                      fill=t["accent_green"] if self.plc.I_TABLE_IND else t["fg_muted"], outline="")
+        c.create_text(cx + table_r + 34, cy, text="%I0009\nIndutivo",
+                      font=("Consolas", 7), fill=t["accent_yellow"], anchor="w")
 
-        # 4 Posições da Mesa:
-        # Posição 0: Entrada (À esquerda, 180° ou topo esquerdo)
-        # Vamos definir as 4 estações ao redor da mesa:
-        # 0: Entrada (Oeste / 180°)
-        # 1: Furação (Norte / 270°)
-        # 2: Teste (Leste / 0°)
-        # 3: Saída (Sul / 90°)
         station_angles = [math.pi, 3 * math.pi / 2.0, 0.0, math.pi / 2.0]
         station_names = ["1. ENTRADA", "2. FURAÇÃO", "3. TESTE", "4. SAÍDA"]
 
         for idx, (s_ang, s_name) in enumerate(zip(station_angles, station_names)):
             sx = cx + (table_r * 0.65) * math.cos(s_ang)
             sy = cy + (table_r * 0.65) * math.sin(s_ang)
+            c.create_oval(sx - 24, sy - 24, sx + 24, sy + 24,
+                          fill=t["canvas_inner"], outline=t["border"], width=2)
+            c.create_text(sx, sy, text=f"P{idx+1}", font=("Segoe UI", 8, "bold"),
+                          fill=t["fg_muted"])
 
-            # Marcador de nicho da peça na mesa
-            c.create_oval(sx - 24, sy - 24, sx + 24, sy + 24, fill="#22242e", outline="#4b5263", width=2)
-            c.create_text(sx, sy, text=f"P{idx+1}", font=("Segoe UI", 8, "bold"), fill="#5c6370")
-
-            # Desenha a peça se houver
             piece = self.plc.table_slots[idx]
             if piece is not None:
-                p_color = "#98c379" if piece.get("ok") else ("#d19a66" if piece.get("drilled") else "#61afef")
-                c.create_oval(sx - 18, sy - 18, sx + 18, sy + 18, fill=p_color, outline="#ffffff", width=2)
-                
-                # Furo no meio se furada
+                if piece.get("ok"):
+                    p_color = t["accent_green"]
+                elif piece.get("drilled"):
+                    p_color = t["accent_orange"]
+                else:
+                    p_color = t["accent_blue"]
+                c.create_oval(sx - 18, sy - 18, sx + 18, sy + 18,
+                              fill=p_color, outline="#ffffff", width=2)
                 if piece.get("drilled"):
-                    c.create_oval(sx - 6, sy - 6, sx + 6, sy + 6, fill="#181822", outline="#282c34", width=1)
-                
-                c.create_text(sx, sy + 1, text=f"#{piece['id']}", font=("Segoe UI", 7, "bold"), fill="#181822")
+                    c.create_oval(sx - 6, sy - 6, sx + 6, sy + 6,
+                                  fill=t["canvas_bg"], outline=t["canvas_inner"], width=1)
+                c.create_text(sx, sy + 1, text=f"#{piece['id']}",
+                              font=("Segoe UI", 7, "bold"), fill="#181822")
 
-        # Rótulos externos das 4 Estações
-        # Estação 1: Entrada
+        # --- Estação Entrada ---
         p1_x = cx - table_r - 80
         p1_y = cy
-        c.create_rectangle(p1_x - 45, p1_y - 25, p1_x + 45, p1_y + 25, fill="#21252b", outline="#61afef", width=1)
-        c.create_text(p1_x, p1_y - 8, text="[ ENTRADA ]", font=("Segoe UI", 8, "bold"), fill="#61afef")
-        sensor_ent_color = "#98c379" if self.plc.I_PART_PRESENT else "#4b5263"
-        c.create_oval(p1_x - 30, p1_y + 4, p1_x - 18, p1_y + 16, fill=sensor_ent_color, outline="")
-        c.create_text(p1_x - 10, p1_y + 10, text="%I0016 Reflex.", font=("Consolas", 7), fill="#abb2bf", anchor="w")
+        c.create_rectangle(p1_x - 45, p1_y - 25, p1_x + 45, p1_y + 25,
+                           fill=t["bg_panel"], outline=t["accent_blue"], width=1)
+        c.create_text(p1_x, p1_y - 8, text="[ ENTRADA ]",
+                      font=("Segoe UI", 8, "bold"), fill=t["accent_blue"])
+        sensor_ent_color = t["accent_green"] if self.plc.I_PART_PRESENT else t["fg_muted"]
+        c.create_oval(p1_x - 30, p1_y + 4, p1_x - 18, p1_y + 16,
+                      fill=sensor_ent_color, outline="")
+        c.create_text(p1_x - 10, p1_y + 10, text="%I0016 Reflex.",
+                      font=("Consolas", 7), fill=t["fg_secondary"], anchor="w")
 
-        # Estação 2: Furação (Norte)
+        # --- Estação Furação (layout corrigido) ---
         p2_x = cx
-        p2_y = cy - table_r - 70
-        c.create_rectangle(p2_x - 90, p2_y - 45, p2_x + 90, p2_y + 45, fill="#21252b", outline="#e5c07b", width=1)
-        c.create_text(p2_x, p2_y - 30, text="[ ESTAÇÃO DE FURAÇÃO ]", font=("Segoe UI", 8, "bold"), fill="#e5c07b")
-        
-        # Representação gráfica da Furadeira e Pistão
+        p2_y = cy - table_r - 75
+        # Caixa mais alta para acomodar o rótulo da trava com folga
+        c.create_rectangle(p2_x - 95, p2_y - 45, p2_x + 95, p2_y + 65,
+                           fill=t["bg_panel"], outline=t["accent_yellow"], width=1)
+        c.create_text(p2_x, p2_y - 32, text="[ ESTAÇÃO DE FURAÇÃO ]",
+                      font=("Segoe UI", 8, "bold"), fill=t["accent_yellow"])
+
+        # Furadeira à esquerda
         drill_col_x = p2_x - 35
-        # Cilindro da furadeira
-        c.create_rectangle(drill_col_x - 12, p2_y - 18, drill_col_x + 12, p2_y + 20, fill="#3e4451", outline="#5c6370")
-        # Haste móvel
-        drill_head_y = p2_y - 10 + (self.plc.drill_pos * 30)
-        c.create_rectangle(drill_col_x - 4, p2_y - 18, drill_col_x + 4, drill_head_y, fill="#abb2bf", outline="")
-        # Broca / Motor
-        motor_col = "#98c379" if self.plc.Q_DRILL_MOTOR else "#5c6370"
-        c.create_oval(drill_col_x - 10, drill_head_y, drill_col_x + 10, drill_head_y + 14, fill=motor_col, outline="#ffffff" if self.plc.Q_DRILL_MOTOR else "")
-        c.create_line(drill_col_x, drill_head_y + 14, drill_col_x, drill_head_y + 26, fill="#abb2bf", width=2)
+        c.create_rectangle(drill_col_x - 12, p2_y - 20,
+                           drill_col_x + 12, p2_y + 20,
+                           fill="#3e4451", outline="#5c6370")
+        drill_head_y = p2_y - 12 + (self.plc.drill_pos * 30)
+        c.create_rectangle(drill_col_x - 4, p2_y - 20,
+                           drill_col_x + 4, drill_head_y,
+                           fill="#abb2bf", outline="")
+        motor_col = t["accent_green"] if self.plc.Q_DRILL_MOTOR else t["fg_muted"]
+        c.create_oval(drill_col_x - 10, drill_head_y,
+                      drill_col_x + 10, drill_head_y + 14,
+                      fill=motor_col,
+                      outline="#ffffff" if self.plc.Q_DRILL_MOTOR else "")
+        c.create_line(drill_col_x, drill_head_y + 14,
+                      drill_col_x, drill_head_y + 26,
+                      fill="#abb2bf", width=2)
 
-        # Sensores de fim de curso da furadeira
-        c.create_oval(drill_col_x + 16, p2_y - 14, drill_col_x + 24, p2_y - 6, fill="#98c379" if self.plc.I_DRILL_UP else "#4b5263", outline="")
-        c.create_text(drill_col_x + 28, p2_y - 10, text="%I0010 (Sup)", font=("Consolas", 7), fill="#abb2bf", anchor="w")
-        c.create_oval(drill_col_x + 16, p2_y + 10, drill_col_x + 24, p2_y + 18, fill="#98c379" if self.plc.I_DRILL_DOWN else "#4b5263", outline="")
-        c.create_text(drill_col_x + 28, p2_y + 14, text="%I0011 (Inf)", font=("Consolas", 7), fill="#abb2bf", anchor="w")
+        c.create_oval(drill_col_x + 16, p2_y - 16,
+                      drill_col_x + 24, p2_y - 8,
+                      fill=t["accent_green"] if self.plc.I_DRILL_UP else t["fg_muted"], outline="")
+        c.create_text(drill_col_x + 28, p2_y - 12, text="%I0010 (Sup)",
+                      font=("Consolas", 7), fill=t["fg_secondary"], anchor="w")
+        c.create_oval(drill_col_x + 16, p2_y + 8,
+                      drill_col_x + 24, p2_y + 16,
+                      fill=t["accent_green"] if self.plc.I_DRILL_DOWN else t["fg_muted"], outline="")
+        c.create_text(drill_col_x + 28, p2_y + 12, text="%I0011 (Inf)",
+                      font=("Consolas", 7), fill=t["fg_secondary"], anchor="w")
 
-        # Trava Pneumática da Peça (%Q0006)
+        # Trava à direita — rótulo claramente abaixo do pistão
         clamp_x = p2_x + 45
         clamp_ext = self.plc.clamp_pos * 14
-        c.create_rectangle(clamp_x, p2_y - 4, clamp_x + 28, p2_y + 16, fill="#2c313a", outline="#61afef")
-        c.create_rectangle(clamp_x - clamp_ext, p2_y + 1, clamp_x, p2_y + 11, fill="#98c379" if self.plc.I_CLAMP_LOCKED else "#e5c07b", outline="")
-        c.create_text(clamp_x + 14, p2_y + 26, text="Trava %Q0006", font=("Consolas", 7), fill="#abb2bf")
+        c.create_rectangle(clamp_x, p2_y - 4, clamp_x + 28, p2_y + 16,
+                           fill=t["bg_panel_alt"], outline=t["accent_blue"])
+        c.create_rectangle(clamp_x - clamp_ext, p2_y + 1, clamp_x, p2_y + 11,
+                           fill=t["accent_green"] if self.plc.I_CLAMP_LOCKED else t["accent_yellow"],
+                           outline="")
+        # Rótulo "Trava %Q0006" bem abaixo do pistão, sem sobreposição
+        c.create_text(clamp_x + 14, p2_y + 38, text="Trava %Q0006",
+                      font=("Consolas", 7), fill=t["fg_secondary"], anchor="n")
 
-        # Estação 3: Teste (Leste)
+        # --- Estação Teste ---
         p3_x = cx + table_r + 90
         p3_y = cy
-        c.create_rectangle(p3_x - 45, p3_y - 50, p3_x + 85, p3_y + 50, fill="#21252b", outline="#98c379", width=1)
-        c.create_text(p3_x + 20, p3_y - 36, text="[ TESTE DO FURO ]", font=("Segoe UI", 8, "bold"), fill="#98c379")
+        c.create_rectangle(p3_x - 45, p3_y - 50, p3_x + 85, p3_y + 50,
+                           fill=t["bg_panel"], outline=t["accent_green"], width=1)
+        c.create_text(p3_x + 20, p3_y - 36, text="[ TESTE DO FURO ]",
+                      font=("Segoe UI", 8, "bold"), fill=t["accent_green"])
 
-        # Cilindro de teste
         test_col_x = p3_x - 15
-        c.create_rectangle(test_col_x - 8, p3_y - 20, test_col_x + 8, p3_y + 15, fill="#3e4451", outline="#5c6370")
+        c.create_rectangle(test_col_x - 8, p3_y - 20,
+                           test_col_x + 8, p3_y + 15,
+                           fill="#3e4451", outline="#5c6370")
         test_probe_y = p3_y - 15 + (self.plc.test_pos * 35)
-        c.create_line(test_col_x, p3_y - 20, test_col_x, test_probe_y + 20, fill="#61afef", width=3)
-        c.create_oval(test_col_x - 3, test_probe_y + 20, test_col_x + 3, test_probe_y + 26, fill="#ffffff", outline="")
+        c.create_line(test_col_x, p3_y - 20,
+                      test_col_x, test_probe_y + 20,
+                      fill=t["accent_blue"], width=3)
+        c.create_oval(test_col_x - 3, test_probe_y + 20,
+                      test_col_x + 3, test_probe_y + 26,
+                      fill="#ffffff", outline="")
 
-        # Sensores de fim de curso do teste
-        c.create_oval(test_col_x + 16, p3_y - 18, test_col_x + 24, p3_y - 10, fill="#98c379" if self.plc.I_TEST_UP else "#4b5263", outline="")
-        c.create_text(test_col_x + 28, p3_y - 14, text="%I0012 (Sup)", font=("Consolas", 7), fill="#abb2bf", anchor="w")
-        c.create_oval(test_col_x + 16, p3_y + 6, test_col_x + 24, p3_y + 14, fill="#98c379" if self.plc.I_TEST_DOWN else "#4b5263", outline="")
-        c.create_text(test_col_x + 28, p3_y + 10, text="%I0013 (Inf)", font=("Consolas", 7), fill="#abb2bf", anchor="w")
+        c.create_oval(test_col_x + 16, p3_y - 18,
+                      test_col_x + 24, p3_y - 10,
+                      fill=t["accent_green"] if self.plc.I_TEST_UP else t["fg_muted"], outline="")
+        c.create_text(test_col_x + 28, p3_y - 14, text="%I0012 (Sup)",
+                      font=("Consolas", 7), fill=t["fg_secondary"], anchor="w")
+        c.create_oval(test_col_x + 16, p3_y + 6,
+                      test_col_x + 24, p3_y + 14,
+                      fill=t["accent_green"] if self.plc.I_TEST_DOWN else t["fg_muted"], outline="")
+        c.create_text(test_col_x + 28, p3_y + 10, text="%I0013 (Inf)",
+                      font=("Consolas", 7), fill=t["fg_secondary"], anchor="w")
 
-        # Temporizador de 3s
         if self.plc.test_timer_start > 0:
             elapsed = min(3.0, time.time() - self.plc.test_timer_start)
-            c.create_text(p3_x + 20, p3_y + 36, text=f"Tempo: {elapsed:.1f}s / 3.0s", font=("Consolas", 8, "bold"), fill="#e5c07b")
+            c.create_text(p3_x + 20, p3_y + 36,
+                          text=f"Tempo: {elapsed:.1f}s / 3.0s",
+                          font=("Consolas", 8, "bold"), fill=t["accent_yellow"])
 
-        # Estação 4: Saída (Sul)
+        # --- Estação Saída ---
         p4_x = cx
         p4_y = cy + table_r + 65
-        c.create_rectangle(p4_x - 55, p4_y - 20, p4_x + 55, p4_y + 20, fill="#21252b", outline="#c678dd", width=1)
-        c.create_text(p4_x, p4_y, text="[ SAÍDA DE PEÇAS ]", font=("Segoe UI", 8, "bold"), fill="#c678dd")
+        c.create_rectangle(p4_x - 55, p4_y - 20, p4_x + 55, p4_y + 20,
+                           fill=t["bg_panel"], outline=t["accent_purple"], width=1)
+        c.create_text(p4_x, p4_y, text="[ SAÍDA DE PEÇAS ]",
+                      font=("Segoe UI", 8, "bold"), fill=t["accent_purple"])
 
-    # Painel inferior de LEDs de diagnóstico de I/O
+    # --------------------------------------------------------
+    # LEDs DE DIAGNÓSTICO — layout dinâmico para caber tudo
+    # --------------------------------------------------------
     def render_io_leds(self):
         c = self.led_canvas
+        t = self.theme
         w = c.winfo_width()
         if w < 100:
             return
         c.delete("all")
+        c.configure(bg=t["canvas_bg"])
 
-        # Lista de Entradas (%I)
         inputs = [
-            ("%I0001", "START", self.plc.I_START),
-            ("%I0002", "RESET", self.plc.I_RESET),
-            ("%I0003", "POSIT.", self.plc.I_POSITION),
-            ("%I0004", "STOP", self.plc.I_STOP),
-            ("%I0005", "CHAVE", self.plc.I_AUTO_MANUAL),
-            ("%I0008", "EMERG", self.plc.I_EMERGENCY),
-            ("%I0009", "MESA", self.plc.I_TABLE_IND),
-            ("%I0010", "FUR.S", self.plc.I_DRILL_UP),
-            ("%I0011", "FUR.I", self.plc.I_DRILL_DOWN),
-            ("%I0012", "TST.S", self.plc.I_TEST_UP),
-            ("%I0013", "TST.I", self.plc.I_TEST_DOWN),
-            ("%I0015", "TRAVA", self.plc.I_CLAMP_LOCKED),
-            ("%I0016", "PRES.", self.plc.I_PART_PRESENT),
+            ("0001", "START", self.plc.I_START),
+            ("0002", "RESET", self.plc.I_RESET),
+            ("0003", "POSIT", self.plc.I_POSITION),
+            ("0004", "STOP",  self.plc.I_STOP),
+            ("0005", "CHAVE", self.plc.I_AUTO_MANUAL),
+            ("0008", "EMERG", self.plc.I_EMERGENCY),
+            ("0009", "MESA",  self.plc.I_TABLE_IND),
+            ("0010", "FUR.S", self.plc.I_DRILL_UP),
+            ("0011", "FUR.I", self.plc.I_DRILL_DOWN),
+            ("0012", "TST.S", self.plc.I_TEST_UP),
+            ("0013", "TST.I", self.plc.I_TEST_DOWN),
+            ("0015", "TRAVA", self.plc.I_CLAMP_LOCKED),
+            ("0016", "PRES",  self.plc.I_PART_PRESENT),
         ]
-
-        # Lista de Saídas (%Q)
         outputs = [
-            ("%Q0001", "M.FUR", self.plc.Q_DRILL_MOTOR),
-            ("%Q0002", "M.MES", self.plc.Q_TABLE_MOTOR),
-            ("%Q0003", "S.DEC", self.plc.Q_DRILL_DOWN),
-            ("%Q0004", "S.SUB", self.plc.Q_DRILL_UP),
-            ("%Q0005", "S.TST", self.plc.Q_TEST_DOWN),
-            ("%Q0006", "S.TRV", self.plc.Q_CLAMP_LOCK),
+            ("0001", "M.FUR", self.plc.Q_DRILL_MOTOR),
+            ("0002", "M.MES", self.plc.Q_TABLE_MOTOR),
+            ("0003", "S.DEC", self.plc.Q_DRILL_DOWN),
+            ("0004", "S.SUB", self.plc.Q_DRILL_UP),
+            ("0005", "S.TST", self.plc.Q_TEST_DOWN),
+            ("0006", "S.TRV", self.plc.Q_CLAMP_LOCK),
         ]
 
-        # Linha 1: Entradas %I
-        c.create_text(10, 18, text="ENTRADAS %I:", font=("Segoe UI", 7, "bold"), fill="#61afef", anchor="w")
-        x_start = 85
-        col_w = 32
-        for i, (addr, name, val) in enumerate(inputs):
-            x = x_start + (i * col_w)
-            color = "#98c379" if val else "#3b4048"
-            c.create_oval(x, 10, x + 12, 22, fill=color, outline="#21252b")
-            c.create_text(x + 6, 28, text=name, font=("Segoe UI", 6), fill="#828997")
-            c.create_text(x + 6, 37, text=addr[2:], font=("Consolas", 6), fill="#5c6370")
+        # Coluna do rótulo ("IN %I", "OUT %Q") e padding direito
+        label_w = 46
+        pad_right = 6
+        n_in = len(inputs)
+        n_out = len(outputs)
 
-        # Linha 2: Saídas %Q
-        c.create_text(10, 68, text="SAÍDAS %Q:", font=("Segoe UI", 7, "bold"), fill="#e5c07b", anchor="w")
-        x_start_q = 85
+        # Larguras dinâmicas — garante que TODAS as entradas caibam
+        col_in = (w - label_w - pad_right) / n_in
+        col_out = (w - label_w - pad_right) / n_out
+
+        # ---- Linha 1: Entradas (%I) ----
+        c.create_text(4, 22, text="IN %I", font=("Segoe UI", 7, "bold"),
+                      fill=t["accent_blue"], anchor="w")
+        for i, (addr, name, val) in enumerate(inputs):
+            cx_i = label_w + col_in * (i + 0.5)
+            color = t["accent_green"] if val else t["btn_secondary"]
+            c.create_oval(cx_i - 5, 16, cx_i + 5, 26,
+                          fill=color, outline=t["border"])
+            c.create_text(cx_i, 36, text=name,
+                          font=("Segoe UI", 6), fill=t["fg_dim"])
+            c.create_text(cx_i, 45, text=addr,
+                          font=("Consolas", 6), fill=t["fg_muted"])
+
+        # ---- Linha 2: Saídas (%Q) ----
+        c.create_text(4, 78, text="OUT %Q", font=("Segoe UI", 7, "bold"),
+                      fill=t["accent_yellow"], anchor="w")
         for i, (addr, name, val) in enumerate(outputs):
-            x = x_start_q + (i * 44)
-            color = "#e5c07b" if val else "#3b4048"
-            c.create_oval(x, 60, x + 12, 72, fill=color, outline="#21252b")
-            c.create_text(x + 6, 78, text=name, font=("Segoe UI", 6), fill="#abb2bf")
-            c.create_text(x + 6, 87, text=addr, font=("Consolas", 6), fill="#5c6370")
+            cx_i = label_w + col_out * (i + 0.5)
+            color = t["accent_yellow"] if val else t["btn_secondary"]
+            c.create_oval(cx_i - 5, 72, cx_i + 5, 82,
+                          fill=color, outline=t["border"])
+            c.create_text(cx_i, 92, text=name,
+                          font=("Segoe UI", 6), fill=t["fg_secondary"])
+            c.create_text(cx_i, 101, text=addr,
+                          font=("Consolas", 6), fill=t["fg_muted"])
 
         # Resetar pulsos momentâneos
         self.plc.I_START = False
@@ -842,35 +1266,53 @@ class FestoScadaApp:
         self.plc.I_POSITION = False
         self.plc.I_QUIT = False
 
+    # --------------------------------------------------------
+    # KPIs
+    # --------------------------------------------------------
     def update_kpis(self):
-        # Atualizar contadores
+        if not hasattr(self, "lbl_kpi_ok") or not self.lbl_kpi_ok.winfo_exists():
+            return
         self.lbl_kpi_ok.configure(text=str(self.plc.R_DRILLED_COUNT))
         self.lbl_kpi_nok.configure(text=str(self.plc.R_REJECT_COUNT))
         total = self.plc.R_DRILLED_COUNT + self.plc.R_REJECT_COUNT
         rate = (self.plc.R_DRILLED_COUNT / total * 100.0) if total > 0 else 100.0
         self.lbl_kpi_rate.configure(text=f"{rate:.1f} %")
 
-        # Atualizar badge de modo
-        mode_text = f"MODO: {self.plc.mode}"
-        if self.plc.mode == "AUTO_RUNNING":
-            bg = "#1b4427"
-            fg = "#98c379"
-        elif self.plc.mode == "MANUAL":
-            bg = "#473b18"
-            fg = "#e5c07b"
-        elif self.plc.mode == "EMERGENCY":
-            bg = "#5c1d1d"
-            fg = "#ff6b6b"
-        elif self.plc.mode == "STOPPED":
-            bg = "#3d2222"
-            fg = "#e06c75"
-        else:
-            bg = "#282c34"
-            fg = "#abb2bf"
+        mode = self.plc.mode
+        self.lbl_mode_badge.configure(text=f"MODO: {mode}",
+                                      bg=self._mode_badge_bg(mode))
 
-        self.lbl_mode_badge.configure(text=mode_text, bg=bg, fg=fg)
 
+# ============================================================
+# PONTO DE ENTRADA
+# ============================================================
 if __name__ == "__main__":
     root = tk.Tk()
-    app = FestoScadaApp(root)
+    root.title("SCADA - Estação de Furação FESTO | Login")
+    root.geometry("1100x720")
+    root.minsize(900, 600)
+    root.configure(bg="#1e1e24")
+
+    app_holder = {"app": None, "login": None}
+
+    def show_login():
+        for child in root.winfo_children():
+            child.destroy()
+        root.title("SCADA - Estação de Furação FESTO | Login")
+        root.geometry("1100x720")
+        root.minsize(900, 600)
+        root.configure(bg="#1e1e24")
+        app_holder["login"] = LoginScreen(root, on_login)
+        app_holder["app"] = None
+
+    def on_login(username):
+        for child in root.winfo_children():
+            child.destroy()
+        root.geometry("1320x860")
+        root.minsize(1150, 780)
+        root.title("SCADA - Estação de Furação FESTO | Indústria 4.0 (UNIFEI)")
+        app_holder["app"] = FestoScadaApp(root, username, on_logout=show_login)
+        app_holder["login"] = None
+
+    show_login()
     root.mainloop()
